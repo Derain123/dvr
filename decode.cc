@@ -732,21 +732,6 @@ Decode::decodeInsts(ThreadID tid)
                 break;
             }
         }
-
-        // 添加检查 stride PC 的逻辑
-        Addr inst_pc = inst->pcState().instAddr();
-        if (cpu->isStridePC(inst_pc)) {
-            DPRINTF(Decode, "Instruction at PC 0x%lx is a stride load\n",
-                    inst->pcState().instAddr());
-            
-            // 检查当前指令是否是分支目标
-            Addr branchTarget = cpu->taintScoreboard.checkBranchInstruction(inst);
-            if (inst_pc == branchTarget) {
-                // 如果当前指令是分支目标，则清空所有 taint
-                cpu->taintScoreboard.clearAllTaints();
-                printf("Decode: Branch target at PC: 0x%lx without dependent load, clearing all taints\n", inst_pc);
-            }   
-        }
     }
 
     // If we didn't process all instructions, then we will need to block

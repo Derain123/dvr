@@ -21,6 +21,21 @@ class CPU;  // 前向声明
 class TaintScoreboard
 {
 public:
+    // 记录计算过程的结构 - 移到类定义开头
+    struct ComputeStep {
+        Addr pc;
+        std::string operation;
+        uint64_t operand1;
+        uint64_t operand2;
+        uint64_t result;
+        std::string description;
+
+        ComputeStep(Addr _pc, const std::string& _op, uint64_t _op1, uint64_t _op2, 
+                    uint64_t _res, const std::string& _desc)
+            : pc(_pc), operation(_op), operand1(_op1), operand2(_op2),
+              result(_res), description(_desc) {}
+    };
+    
     // 依赖链结构，记录从stride load到dependent load/store的所有指令
     struct DependencyChain {
         Addr basePC;                // stride load的PC
@@ -89,6 +104,15 @@ public:
     // 获取指定 PC 的 stride 值
     int getStrideValue(Addr pc) const;
     
+    // 获取指定 PC 的计算步骤
+    const std::vector<ComputeStep>* getComputeSteps(Addr pc) const;
+    
+    // 使用新的初始值重新计算指定 PC 的步骤
+    uint64_t recomputeStepsForPC(Addr pc, uint64_t initValue);
+    
+    // 在writeback阶段解码依赖链指令的操作数
+    void decodeChainInstructionOperands(Addr pc, const DynInstPtr& inst);
+    
 private:
     // CPU指针，用于访问CPU的方法
     CPU *cpu;
@@ -123,25 +147,15 @@ private:
     // 存储污点寄存器的值
     std::map<int, uint64_t> taintedValues;
     
-    // 使用新的初始值重新计算所有步骤
-    void recomputeSteps(uint64_t initValue);
+    // 修改为映射结构，每个 stride PC 对应一组计算步骤
+    std::map<Addr, std::vector<ComputeStep>> computeStepsByPC;
     
-    // 记录计算过程的结构
-    struct ComputeStep {
-        Addr pc;
-        std::string operation;
-        uint64_t operand1;
-        uint64_t operand2;
-        uint64_t result;
-        std::string description;
+    // 当前会话的计算步骤
+    std::map<Addr, std::vector<ComputeStep>> currentSessionComputeSteps;
+    
+    // 存储正确的操作数值，用于后续比较
+    std::map<Addr, std::map<int, uint64_t>> correctOperandValues;
 
-        ComputeStep(Addr _pc, const std::string& _op, uint64_t _op1, uint64_t _op2, 
-                    uint64_t _res, const std::string& _desc)
-            : pc(_pc), operation(_op), operand1(_op1), operand2(_op2),
-              result(_res), description(_desc) {}
-    };
-    
-    std::vector<ComputeStep> computeSteps;
 };
 
 } // namespace o3

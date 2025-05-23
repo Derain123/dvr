@@ -47,6 +47,7 @@
 
 #include <queue>
 
+#include "base/types.hh"
 #include "cpu/checker/cpu.hh"
 #include "cpu/o3/dyn_inst.hh"
 #include "cpu/o3/fu_pool.hh"
@@ -1234,6 +1235,7 @@ IEW::executeInsts()
             inst->setExecuted();
 
             instToCommit(inst);
+            
         }
 
         updateExeInstStats(inst);
@@ -1354,6 +1356,11 @@ IEW::writebackInsts()
 
         DPRINTF(IEW, "Sending instructions to commit, [sn:%lli] PC %s.\n",
                 inst->seqNum, inst->pcState());
+
+        Addr pc = inst->pcState().instAddr();
+        
+        // 调用依赖链指令解码函数
+        cpu->taintScoreboard.decodeChainInstructionOperands(pc, inst);
 
         iewStats.instsToCommit[tid]++;
         // Notify potential listeners that execution is complete for this

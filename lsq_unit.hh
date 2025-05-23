@@ -50,6 +50,7 @@
 
 #include "arch/generic/debugfaults.hh"
 #include "arch/generic/vec_reg.hh"
+#include "arch/generic/mmu.hh"
 #include "base/circular_queue.hh"
 #include "cpu/base.hh"
 #include "cpu/inst_seq.hh"
@@ -91,6 +92,7 @@ class LSQUnit
     static constexpr auto MaxDataBytes = MaxVecRegLenInBytes;
 
     using LSQRequest = LSQ::LSQRequest;
+
   private:
     class LSQEntry
     {
@@ -376,12 +378,12 @@ class LSQUnit
 
     unsigned int cacheLineSize();
 
-    // /** 
-    //  * 将虚拟地址转换为物理地址
-    //  * @param vaddr 要转换的虚拟地址
-    //  * @return 转换后的物理地址，如果转换失败返回0
-    //  */
-    // Addr translateVirtualToPhysical(Addr vaddr);
+    /** 
+     * translate virtual address to physical address
+     * @param vaddr the virtual address to translate
+     * @return the translated physical address, if translation fails return 0
+     */
+    Addr translateVirtualToPhysical(Addr vaddr, size_t size);
 
   private:
     /** Reset the LSQ state */
@@ -548,6 +550,26 @@ class LSQUnit
         int getStrideValue(Addr pc) const;
     };
 
+    class TestTranslation : public BaseMMU::Translation
+    {
+      protected:
+        LSQUnit *lsqUnit;
+
+      public:
+        TestTranslation(LSQUnit *_lsqUnit) : lsqUnit(_lsqUnit) {}
+
+        void markDelayed() {}
+
+        void
+        finish(const Fault &fault, const RequestPtr &req,
+            gem5::ThreadContext *tc, BaseMMU::Mode mode)
+        {
+            assert(mode == BaseMMU::Read);
+            // lsqUnit->finishTestTranslation(fault, req);
+            delete this;
+        }
+    };
+
     // 在 LSQUnit 类的构造函数中添加 strideDetector 的初始化
     StrideDetector strideDetector;
 
@@ -614,10 +636,14 @@ class LSQUnit
 
     void executeVectorizedStrideLoad(const DynInstPtr &inst, Addr baseAddr, int stride);
 
+    void executeDependentLoad(const DynInstPtr &inst, Addr baseAddr);
+
     // 在 LSQUnit 类的私有部分添加
     private:
         // 标志，表示当前是否正在执行向量化加载
         bool inVectorizedLoad = false;
+        // 标志，表示当前是否正在执行依赖加载
+        bool inDependentLoad = false;
 };
 
 } // namespace o3

@@ -430,6 +430,17 @@ LSQ::recvTimingResp(PacketPtr pkt)
             uint32_t value = *reinterpret_cast<uint32_t*>(data);
             vectorLoadValues.push_back(value);  // save loaded value
             printf("0x%08X (word)\n", value);
+
+            // 使用保存的 stride load PC
+            const auto* steps = cpu->taintScoreboard.getComputeSteps(currentStridePC);
+            if (steps) {
+                uint64_t result = cpu->taintScoreboard.recomputeStepsForPC(currentStridePC, value);
+                printf("  Recomputed value: %#lx\n", result);
+                
+                // 存储计算结果
+                addComputedResult(result);
+            }
+
         } else if (dataSize == 8) {
             // 8 bytes - print as unsigned long integer
             uint64_t value = *reinterpret_cast<uint64_t*>(data);
@@ -445,7 +456,49 @@ LSQ::recvTimingResp(PacketPtr pkt)
 
         // clean up
         delete vectorMarker;
-        delete pkt;
+        //delete pkt;
+        return true;
+    }
+
+    // check if it is a dependent load response
+    DependentMarker *dependentMarker = dynamic_cast<DependentMarker*>(pkt->senderState);
+    if (dependentMarker) {
+        //print data
+        printf("Received dependent load response for address: %#lX\n", pkt->getAddr());
+        printf("  Data received: ");
+
+        // get data size and pointer
+        int dataSize = pkt->getSize();
+        uint8_t *data = pkt->getPtr<uint8_t>();
+
+        // print different format according to data size
+        if (dataSize == 1) {
+            // 1 byte - print as unsigned byte  
+            printf("0x%02X (byte)\n", *data);
+        } else if (dataSize == 2) {
+            // 2 bytes - print as unsigned short
+            uint16_t value = *reinterpret_cast<uint16_t*>(data);
+            printf("0x%04X (halfword)\n", value);
+        } else if (dataSize == 4) {
+            // 4 bytes - print as unsigned integer
+            uint32_t value = *reinterpret_cast<uint32_t*>(data);
+            printf("0x%08X (word)\n", value);
+        } else if (dataSize == 8) {
+            // 8 bytes - print as unsigned long integer
+            uint64_t value = *reinterpret_cast<uint64_t*>(data);
+            printf("0x%016lX (doubleword)\n", value);
+        } else {
+            // other size - print as byte array
+            printf("[ ");
+            for (int i = 0; i < dataSize; i++) {
+                printf("%02X ", data[i]);
+            }
+            printf("] (%d bytes)\n", dataSize);
+        }
+
+        // clean up
+        delete dependentMarker;
+        // delete pkt;
         return true;
     }
 
@@ -1595,6 +1648,30 @@ LSQ::getStrideValue(Addr pc) const
     return 0;
 }
 
+// 存储向量加载的计算结果
+uint64_t LSQ::computedResults[5];  // 存储5个计算结果
+int LSQ::numResults;               // 当前结果数量
+bool LSQ::resultsReady;           // 结果是否准备好
+
+// 初始化结果存储
+void LSQ::initResults() {
+    numResults = 0;
+    resultsReady = false;
+}
+
+// 添加一个计算结果
+void LSQ::addComputedResult(uint64_t result) {
+    if (numResults < 5) {
+        computedResults[numResults++] = result;
+        if (numResults == 4) {  // 当收集到4个结果时
+            resultsReady = true;
+        }
+    }
+}
+
+// 获取计算结果
+const uint64_t* LSQ::getComputedResults() const { return computedResults; }
+bool LSQ::hasResults() const { return resultsReady; }
 
 } // namespace o3
 } // namespace gem5

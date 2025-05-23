@@ -60,6 +60,7 @@
 #include "mem/port.hh"
 #include "sim/sim_object.hh"
 
+
 namespace gem5
 {
 
@@ -77,6 +78,13 @@ class VectorMarker : public Packet::SenderState
 {
   public:
     VectorMarker() {}
+};
+
+// 用于标记依赖加载的请求
+class DependentMarker : public Packet::SenderState
+{
+  public:
+    DependentMarker() {}
 };
 
 class LSQ
@@ -906,6 +914,27 @@ class LSQ
 
     // 获取向量加载的值
     const std::vector<uint64_t>& getVectorLoadValues() const { return vectorLoadValues; }
+
+    // 存储当前 stride load 的 PC
+    Addr currentStridePC;
+
+    // 设置当前 stride load PC
+    void setCurrentStridePC(Addr pc) { currentStridePC = pc; }
+
+    // 存储向量加载的计算结果
+    static uint64_t computedResults[5];  // 存储5个计算结果
+    static int numResults;               // 当前结果数量
+    static bool resultsReady;           // 结果是否准备好
+
+    // 初始化结果存储
+    void initResults();
+
+    // declare addComputedResult
+    void addComputedResult(uint64_t result);
+
+    // 获取计算结果
+    const uint64_t* getComputedResults() const;
+    bool hasResults() const;
 
   protected:
     /** D-cache is blocked */

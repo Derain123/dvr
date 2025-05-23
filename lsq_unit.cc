@@ -109,6 +109,35 @@ LSQUnit::completeDataAccess(PacketPtr pkt)
     LSQRequest *request = dynamic_cast<LSQRequest *>(pkt->senderState);
     DynInstPtr inst = request->instruction();
 
+    // 添加特定PC的completeDataAccess信息打印
+    Addr pc = inst->pcState().instAddr();
+    if (pc == 0x101a8 || pc == 0x101a6 || pc == 0x101a4) {
+        printf("DVR: LSQ CompleteDataAccess for PC %#lx\n", pc);
+        printf("DVR: LSQ CompleteDataAccess packet addr: %#lx\n", pkt->getAddr());
+        printf("DVR: LSQ CompleteDataAccess packet size: %d\n", pkt->getSize());
+        
+        // 打印返回的数据
+        if (pkt->hasData()) {
+            printf("DVR: LSQ CompleteDataAccess data: ");
+            uint8_t *data = pkt->getPtr<uint8_t>();
+            int size = pkt->getSize();
+            
+            if (size == 4) {
+                uint32_t value = *reinterpret_cast<uint32_t*>(data);
+                printf("0x%08x (word)\n", value);
+            } else if (size == 8) {
+                uint64_t value = *reinterpret_cast<uint64_t*>(data);
+                printf("0x%016lx (doubleword)\n", value);
+            } else {
+                printf("[ ");
+                for (int i = 0; i < size; i++) {
+                    printf("%02x ", data[i]);
+                }
+                printf("] (%d bytes)\n", size);
+            }
+        }
+    }
+
     // hardware transactional memory
     // sanity check
     if (pkt->isHtmTransactional() && !inst->isSquashed()) {
@@ -590,6 +619,21 @@ LSQUnit::checkViolations(typename LoadQueue::iterator& loadIt,
 Fault
 LSQUnit::executeLoad(const DynInstPtr &inst)
 {
+    ThreadID tid = inst->threadNumber;
+    
+    // 添加特定PC的executeLoad信息打印
+    Addr pc = inst->pcState().instAddr();
+    if (pc == 0x101a8 || pc == 0x101a6 || pc == 0x101a4) {
+        printf("DVR: LSQ ExecuteLoad for PC %#lx\n", pc);
+        printf("DVR: LSQ ExecuteLoad thread: %d\n", tid);
+        printf("DVR: LSQ ExecuteLoad sequence: %llu\n", inst->seqNum);
+        
+        // 如果有效地址已经计算出来
+        if (inst->effAddrValid()) {
+            printf("DVR: LSQ ExecuteLoad effective address: %#lx\n", inst->effAddr);
+        }
+    }
+
     // Execute a specific load.
     Fault load_fault = NoFault;
 
@@ -1074,6 +1118,37 @@ LSQUnit::storePostSend()
 void
 LSQUnit::writeback(const DynInstPtr &inst, PacketPtr pkt)
 {
+    assert(inst->isLoad());
+
+    // 添加特定PC的writeback信息打印
+    Addr pc = inst->pcState().instAddr();
+    if (pc == 0x101a8 || pc == 0x1019e || pc == 0x101a0) {
+        printf("DVR: LSQ Writeback for PC %#lx\n", pc);
+        printf("DVR: LSQ Writeback address: %#lx\n", pkt->getAddr());
+        printf("DVR: LSQ Writeback size: %d bytes\n", pkt->getSize());
+        
+        // 打印加载的数据
+        if (pkt->hasData()) {
+            printf("DVR: LSQ Writeback data: ");
+            uint8_t *data = pkt->getPtr<uint8_t>();
+            int size = pkt->getSize();
+            
+            if (size == 4) {
+                uint32_t value = *reinterpret_cast<uint32_t*>(data);
+                printf("0x%08x (word)\n", value);
+            } else if (size == 8) {
+                uint64_t value = *reinterpret_cast<uint64_t*>(data);
+                printf("0x%016lx (doubleword)\n", value);
+            } else {
+                printf("[ ");
+                for (int i = 0; i < size; i++) {
+                    printf("%02x ", data[i]);
+                }
+                printf("] (%d bytes)\n", size);
+            }
+        }
+    }
+
     iewStage->wakeCPU();
 
     // Squashed instructions do not need to complete their access.
@@ -1320,6 +1395,26 @@ LSQUnit::read(LSQRequest *request, ssize_t load_idx)
     LQEntry& load_entry = loadQueue[load_idx];
     const DynInstPtr& load_inst = load_entry.instruction();
 
+    // 添加特定PC的详细地址打印
+    Addr pc = load_inst->pcState().instAddr();
+    if (pc == 0x101a8 || pc == 0x1019e || pc == 0x101a0) {
+        printf("DVR: LSQ Load instruction at PC %#lx\n", pc);
+        printf("DVR: LSQ Instruction: %s\n", load_inst->staticInst->getName().c_str());
+        printf("DVR: LSQ Virtual address: %#lx\n", request->mainReq()->getVaddr());
+        if (request->mainReq()->hasPaddr()) {
+            printf("DVR: LSQ Physical address: %#lx\n", request->mainReq()->getPaddr());
+        }
+        printf("DVR: LSQ Load size: %d bytes\n", request->mainReq()->getSize());
+        printf("DVR: LSQ Sequence number: %llu\n", load_inst->seqNum);
+        
+    }
+
+    assert(load_inst);
+    assert(load_inst->isLoad());
+
+    DPRINTF(LSQUnit, "Executing load PC %s, [sn:%lli]\n",
+            load_inst->pcState(), load_inst->seqNum);
+
     load_entry.setRequest(request);
     assert(load_inst);
 
@@ -1357,6 +1452,45 @@ LSQUnit::read(LSQRequest *request, ssize_t load_idx)
                 }
             }
         }
+
+            // 对于依赖加载,检查是否有计算结果可用
+        printf("DVR: Checking dependent load conditions - inDependentLoad: %s, hasResults: %s\n", 
+               inDependentLoad ? "true" : "false", 
+               lsq->hasResults() ? "true" : "false");
+
+        if (!inDependentLoad && lsq->hasResults()) {
+            // 使用计算结果
+            const uint64_t* results = lsq->getComputedResults();
+            
+            printf("DVR: Starting dependent load execution with %d results\n", lsq->numResults);
+            for (int i = 0; i < lsq->numResults; i++) {
+                printf("DVR: Result %d: %#lx\n", i, results[i]);
+            }
+
+            // 设置标志，表示正在执行加载
+            inDependentLoad = true;
+            
+            //迭代执行dependent load
+            for (int i = 0; i < 4; i++) {
+                printf("DVR: Executing dependent load %d with address %#lx\n", i, results[i]);
+                executeDependentLoad(load_inst, results[i]);
+            }
+
+            // 重置标志
+            inDependentLoad = false;
+            
+            // 重置结果状态
+            lsq->initResults();
+            printf("DVR: Dependent load execution completed\n");
+        } else {
+            if (inDependentLoad) {
+                printf("DVR: Skipping dependent load - already in dependent load\n");
+            }
+            if (!lsq->hasResults()) {
+                printf("DVR: Skipping dependent load - no results available\n");
+            }
+        }
+
     }
 //===========================DVR Discovery=======================================//
 
@@ -1766,13 +1900,13 @@ LSQUnit::StrideDetector::getStrideValue(Addr pc) const
 void
 LSQUnit::executeVectorizedStrideLoad(const DynInstPtr &inst, Addr baseAddr, int stride)
 {
-    // 检查指令是否已经完成地址转换
+    // check if the instruction has completed address translation
     if (!inst->translationCompleted()) {
         DPRINTF(LSQUnit, "Instruction translation not completed, cannot vectorize\n");
         return;
     }
     
-    // 获取基础物理地址和原始请求
+    // get the base physical address and the original request
     Addr basePhysAddr = 0;
     RequestPtr origReq = nullptr;
     if (inst->savedRequest && inst->savedRequest->mainReq()) {
@@ -1793,42 +1927,39 @@ LSQUnit::executeVectorizedStrideLoad(const DynInstPtr &inst, Addr baseAddr, int 
     printf("Requestor ID: %d\n", inst->requestorId());
     printf("\n");
     
-    // 向缓存发出4条加载请求
+    // send 4 load requests to the cache
     const int vectorSize = 5;  
     
-    // 为向量加载分配一个缓冲区来存储所有结果
+    // allocate a buffer for the vector load to store all results
     uint8_t *vectorData = new uint8_t[inst->effSize * vectorSize];
     
+    // 获取该 PC 并传递给 LSQ
+    Addr pc = inst->pcState().instAddr();
+    cpu->getLSQ().setCurrentStridePC(pc);
+    
     for (int i = 1; i < vectorSize; i++) {
-        // 计算物理地址
+        // calculate the physical address
         Addr paddr = basePhysAddr + i * stride;
         
         printf("Request %d:\n", i);
-        printf("  Physical Address: 0x%lx\n", paddr);
+        printf("Physical Address: 0x%lx\n", paddr);
         
-        // 计算此请求的数据缓冲区偏移
+        // calculate the data buffer offset for this request
         uint8_t *dataPtr = vectorData + (i * inst->effSize);
         
-        // 直接从原始请求克隆一个新请求，只修改物理地址
+        // clone a new request from the original request, only modify the physical address
         RequestPtr req = std::make_shared<Request>(*origReq);
         req->setPaddr(paddr);
         
-        // 创建数据包
+        // create a packet
         PacketPtr data_pkt = new Packet(req, MemCmd::ReadReq);
         data_pkt->dataStatic(dataPtr);
 
-        // 设置向量加载标记
+        // set the vector load marker
         data_pkt->senderState = new VectorMarker();
 
-        // 直接发送数据包到缓存
+        // send the packet to the cache directly
         bool sent = dcachePort->sendTimingReq(data_pkt);
-
-        // 测试地址转换
-        Addr testVaddr = 0x7ffffffffffec4f0;
-        // Addr testPaddr = translateVirtualToPhysical(testVaddr);
-        Addr testPaddr = 0x7ffffffffffec4f0;
-        DPRINTF(LSQUnit, "Test translation: vaddr %#lx -> paddr %#lx\n", 
-                testVaddr, testPaddr);
 
         if (sent) {
             printf("  Vector load request %d sent directly to cache\n", i);
@@ -1843,42 +1974,140 @@ LSQUnit::executeVectorizedStrideLoad(const DynInstPtr &inst, Addr baseAddr, int 
     
     // 这里没有释放 vectorData，因为它会在响应处理中使用
 }
+
+void
+LSQUnit::executeDependentLoad(const DynInstPtr &inst, Addr baseAddr)
+{
+    // get the base virtual address and the original request
+    RequestPtr origReq = nullptr;
+    if (inst->savedRequest && inst->savedRequest->mainReq()) {
+        origReq = inst->savedRequest->mainReq();
+        printf("Using base virtual address: %lx\n", baseAddr);
+    } else {
+        printf("No saved request with virtual address, cannot vectorize\n");
+        return;
+    }
+    
+    printf("===== Dependent Load Information =====\n");
+    printf("Instruction PC: 0x%lx\n", inst->pcState().instAddr());
+    printf("Base Virtual Address: 0x%lx\n", baseAddr);
+    printf("Data Size: %d bytes\n", inst->effSize);
+    printf("Requestor ID: %d\n", inst->requestorId());
+    printf("\n");
+    
+    // 检查baseAddr是否有效
+    if (baseAddr == 0) {
+        printf("DVR: Warning - Invalid base address (0x0)\n");
+        return;
+    }
+    
+    // 修改地址范围检查 - 检查地址是否在合理的用户空间范围内
+    // 用户空间地址通常在 0x400000 到 0x7fffffffffffff 之间
+    if (baseAddr < 0x400000ULL || baseAddr > 0x7fffffffffffffULL) {
+        printf("DVR: Warning - Address %#lx is outside valid user space range, skipping\n", baseAddr);
+        return;
+    }
+    
+    // allocate a buffer for the dependent load to store result
+    uint8_t *DependentData = new uint8_t[inst->effSize];
+    
+    // calculate the physical address，传入正确的大小
+    Addr paddr = translateVirtualToPhysical(baseAddr, inst->effSize);
+    
+    if (paddr == 0) {
+        printf("DVR: Warning - Address translation failed for vaddr %#lx\n", baseAddr);
+        delete[] DependentData;  // 只在地址转换失败时删除
+        return;
+    }
+
+    printf("Physical Address: 0x%lx\n", paddr);
+    
+    // clone a new request from the original request, only modify the physical address
+    RequestPtr req = std::make_shared<Request>(*origReq);
+
+    // RequestPtr req = std::make_shared<Request>(
+    //     baseAddr,                   // 虚拟地址
+    //     inst->effSize,             // 数据大小
+    //     0,                         // 标志
+    //     inst->requestorId(),       // 请求者ID
+    //     0,                         // PC
+    //     inst->contextId()          // 上下文ID
+    // );
+    
+    // 设置物理地址
+    req->setPaddr(paddr);
+        
+    // create a packet
+    PacketPtr data_pkt = new Packet(req, MemCmd::ReadReq);
+    data_pkt->dataStatic(DependentData);
+
+    // set the dependent load marker
+    data_pkt->senderState = new DependentMarker();
+
+    // send the packet to the cache directly
+    bool sent = dcachePort->sendTimingReq(data_pkt);
+
+    if (sent) {
+         printf("  Dependent load request sent directly to cache\n");
+    } else {
+        printf("  Dependent load request failed to send, cache blocked\n");
+        delete data_pkt;
+        delete[] DependentData;  // 只在发送失败时删除
+    }
+    
+    printf("===== End of Dependent Load Information =====\n\n");
+    DPRINTF(LSQUnit, "Dependent load requests sent\n");
+    
+    // 这里没有释放 DependentData，因为它会在响应处理中使用
+}
+
 //===========================DVR Vectorized=======================================//
 
 //===========================DVR Vectorized=======================================//
-// Addr 
-// LSQUnit::translateVirtualToPhysical(Addr vaddr) 
-// {
-//     // 获取当前线程上下文
-//     gem5::ThreadContext *tc = cpu->tcBase(0);
+Addr 
+LSQUnit::translateVirtualToPhysical(Addr vaddr, size_t size) 
+{
+    // 检查地址对齐
+    if (vaddr % size != 0) {
+        printf("DVR: Warning - Unaligned address %#lx for size %zu\n", vaddr, size);
+        // 对齐地址到size边界
+        vaddr = (vaddr / size) * size;
+        printf("DVR: Aligned address to %#lx\n", vaddr);
+    }
     
-//     // 创建请求
-//     RequestPtr req = std::make_shared<Request>(
-//         vaddr,                     // 虚拟地址
-//         8,                         // 大小(bytes)
-//         MemCmd::ReadReq,          // 使用 MemCmd::ReadReq
-//         cpu->dataRequestorId(),   
-//         0,                        
-//         tc->contextId()           
-//     );
+    // 获取当前线程上下文
+    gem5::ThreadContext *tc = cpu->tcBase(0);
+    
+    // 创建请求
+    RequestPtr req = std::make_shared<Request>(
+        vaddr,                     // 虚拟地址
+        size,                         // 大小(bytes)
+        MemCmd::ReadReq,          // 使用 MemCmd::ReadReq
+        cpu->dataRequestorId(),   
+        0,                        
+        tc->contextId()           
+    );
 
-//     // 使用 translate 而不是 translateAddress
-//     Addr paddr;
-//     Mode mode = BaseMMU::Read;
-//     Process *p = tc->getProcessPtr();
+    // 使用 translate 而不是 translateAddress
+    Addr paddr;
+    gem5::BaseMMU::Mode mode = gem5::BaseMMU::Read;
+    Process *p = tc->getProcessPtr();
+    TestTranslation *trans = new TestTranslation(this);
     
-//     // 进行地址转换
-//     Fault fault = cpu->mmu->Translate(req, tc, mode);
-    
-//     if (fault == NoFault) {
-//         paddr = req->getPaddr();
-//         printf("Address translation: vaddr %#lx -> paddr %#lx\n", vaddr, paddr);
-//         return paddr;
-//     } else {
-//         printf("Address translation failed for vaddr %#lx\n", vaddr);
-//         return 0;
-//     }
-// }
+    // 进行地址转换
+    cpu->mmu->translateTiming(req, tc, trans, mode);
+
+    uint64_t Trans_finish_flag = req->getTrans_finish_flag();
+    if (Trans_finish_flag == 1) {
+        paddr = req->getPaddr();
+        printf("Address translation: vaddr %#lx -> paddr %#lx (size: %zu)\n", vaddr, paddr, size);
+        req->setTrans_finish_flag(0);
+        return paddr;
+    } else {
+        printf("Address translation failed for vaddr %#lx\n", vaddr);
+        return 0;
+    }
+}
 //===========================DVR Vectorized=======================================//
 } // namespace o3
 } // namespace gem5

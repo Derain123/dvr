@@ -613,7 +613,7 @@ class CPU : public BaseCPU
     int getStrideValue(Addr pc) const;
 
     // 获取 LSQ
-    const LSQ& getLSQ() const { return iew.ldstQueue; }
+    LSQ& getLSQ() { return iew.ldstQueue; }
 
 };
 

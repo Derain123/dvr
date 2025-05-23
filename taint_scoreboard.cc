@@ -44,9 +44,6 @@ TaintScoreboard::taintReg(PhysRegIdPtr destReg, Addr pc)
         if (!values.empty()) {
             initValue = values.back();  // use the latest vectorized load value
             printf("DVR: Using vector loaded value: %#lx as initial value\n", initValue);
-            
-            // recompute steps with new initial value
-            recomputeSteps(initValue);
         }
     }
     
@@ -86,6 +83,9 @@ TaintScoreboard::clearAllTaints()
     
     hasActiveSession = false;
     numTaintedRegs = 0;
+    
+    // 清理当前会话的计算步骤
+    currentSessionComputeSteps.clear();
 }
 
 void
@@ -161,7 +161,7 @@ TaintScoreboard::propagateTaint(const DynInstPtr& inst)
                    destReg->className(), (int)destReg->index(), currentPC);
         }
     }
-    
+
     // if it is a memory access instruction and has a tainted source, update the dependency chain
     if (inst->isLoad() && hasTaintedSrc) {
         numDetectedPatterns++;
@@ -179,11 +179,12 @@ TaintScoreboard::propagateTaint(const DynInstPtr& inst)
         
         // add to dependency chain collection
         dependencyChains.push_back(chain);
-        
+
         // clear all taint of the current session
         clearAllTaints();
+        currentSessionComputeSteps.erase(stridePC);
         
-        // mark that dependent load has been found
+        // 标记该 stride PC 已完成
         completedStridePCs.insert(stridePC);
         
         printf("DVR: Saved dependency chain and cleared taints\n");
@@ -192,94 +193,6 @@ TaintScoreboard::propagateTaint(const DynInstPtr& inst)
         printDependencyChains();
     }
     
-    if (hasTaintedSrc) {
-        const auto *si = inst->staticInst.get();
-        uint32_t machineInst = si->getRawInst();
-        
-        // get the operation value of the current instruction
-        uint64_t srcValue = taintedValues[taintedSrcReg->index()];
-        uint64_t result = srcValue;
-        
-        // parse the instruction type and operation
-        uint32_t opcode = machineInst & 0x7f;
-        uint32_t funct3 = (machineInst >> 12) & 0x7;
-        uint32_t rs2 = (machineInst >> 20) & 0x1f;
-        int32_t imm = ((int32_t)machineInst) >> 20;
-        
-        std::string operation;
-        uint64_t operand2 = 0;
-        std::string description;
-        
-        // record the value of non-tainted source registers
-        std::map<int, uint64_t> otherRegsValues;
-        for (int i = 0; i < inst->numSrcRegs(); i++) {
-            PhysRegIdPtr srcReg = inst->renamedSrcIdx(i);
-            if (srcReg && srcReg != taintedSrcReg) {  // non-tainted source register
-                printf("DVR: Found non-tainted source register %s (phys: %d)\n",
-                       srcReg->className(), (int)srcReg->index());
-                // we can record the value of the register, but there is no direct method to get the physical register value
-                // we can add a method to get the physical register value to the CPU class
-                otherRegsValues[srcReg->index()] = 0xDEADBEEF;  // use a marker value temporarily
-            }
-        }
-        
-        switch(opcode) {
-            case 0x0a:  // slli
-            {
-                operation = "slli";
-                operand2 = 2;
-                result = srcValue << operand2;
-                description = "Left shift by " + std::to_string(operand2);
-                break;
-            }
-            
-            case 0x32:  // add
-            {
-                operation = "add";
-                // get the value of the second source operand
-                uint64_t value = 0;
-                inst->getRegOperand(inst->staticInst.get(), 1, &value);
-                operand2 = value;
-                result = srcValue + operand2;
-                description = "Add base and offset";
-                break;
-            }
-            
-            case 0x03:  // Load
-            {
-                operation = "lw";
-                operand2 = imm;
-                result = srcValue + operand2;
-                description = "Load from memory: base + " + std::to_string(operand2);
-                printf("DVR: Final memory access address: %#lx\n", result);
-                break;
-            }
-        }
-        
-        // record the compute step
-        printf("DVR: Compute step at PC %#lx: %s src=%#lx, op2=%#lx -> result=%#lx (%s)\n",
-               currentPC, operation.c_str(), srcValue, operand2, result, description.c_str());
-        
-        // save the compute step
-        computeSteps.push_back(ComputeStep(
-            currentPC,
-            operation,
-            srcValue,
-            operand2,
-            result,
-            description
-        ));
-        
-        // update the value of the destination register
-        if (inst->numDestRegs() > 0) {
-            PhysRegIdPtr destReg = inst->renamedDestIdx(0);
-            if (destReg) {
-                taintedValues[destReg->index()] = result;
-                printf("DVR: Updated register %s (phys: %d) with value: %#lx\n",
-                       destReg->className(), (int)destReg->index(), result);
-            }
-        }
-    }
 }
 
 Addr
@@ -433,30 +346,252 @@ TaintScoreboard::decodeDependencyChain(Addr pc, uint32_t inst) const
     printf("\n");
 }
 
-void
-TaintScoreboard::recomputeSteps(uint64_t initValue)
+const std::vector<TaintScoreboard::ComputeStep>* 
+TaintScoreboard::getComputeSteps(Addr pc) const 
+{
+    auto it = computeStepsByPC.find(pc);
+    if (it != computeStepsByPC.end()) {
+        return &(it->second);
+    }
+    return nullptr;
+}
+
+uint64_t 
+TaintScoreboard::recomputeStepsForPC(Addr pc, uint64_t initValue)
 {
     uint64_t currentValue = initValue;
     
-    // 遍历所有已保存的计算步骤
-    for (auto& step : computeSteps) {
-        // 使用新的值重新计算
-        if (step.operation == "slli") {
-            currentValue = currentValue << step.operand2;
-        } else if (step.operation == "add") {
-            currentValue = currentValue + step.operand2;
-        } else if (step.operation == "lw") {
-            currentValue = currentValue + step.operand2;
+    auto it = computeStepsByPC.find(pc);
+    if (it != computeStepsByPC.end()) {
+        for (auto& step : it->second) {
+            uint64_t oldValue = currentValue;  // 保存原值用于打印
+            
+            if (step.operation == "slli") {
+                currentValue = currentValue << step.operand2;
+                printf("DVR: Recompute step at PC %#lx: %s %#lx << %d -> %#lx (%s)\n",
+                       step.pc, step.operation.c_str(), oldValue, step.operand2, 
+                       currentValue, step.description.c_str());
+            } else if (step.operation == "add") {
+                currentValue = currentValue + step.operand2;
+                printf("DVR: Recompute step at PC %#lx: %s %#lx + %#lx -> %#lx (%s)\n",
+                       step.pc, step.operation.c_str(), oldValue, step.operand2, 
+                       currentValue, step.description.c_str());
+            } else if (step.operation == "lw") {
+                // 对于 load 指令,我们使用计算出的地址作为结果
+                currentValue = currentValue + step.operand2;
+                printf("DVR: Recompute step at PC %#lx: %s base=%#lx + offset=%#lx -> addr=%#lx (%s)\n",
+                       step.pc, step.operation.c_str(), oldValue, step.operand2, 
+                       currentValue, step.description.c_str());
+            }
+            
+            // 更新步骤中的值
+            step.operand1 = oldValue;  // 保存输入值
+            step.result = currentValue; // 保存计算结果
+        }
+    }
+    
+    return currentValue;
+}
+
+void
+TaintScoreboard::decodeChainInstructionOperands(Addr pc, const DynInstPtr& inst)
+{
+    // 检查当前PC是否在任何依赖链中
+    bool isInChain = false;
+    Addr stridePC = 0;
+    std::vector<Addr> chainOrder;
+    
+    // 检查是否在当前活跃会话的依赖链中
+    if (hasActiveSession && activeSession.dependencyChain.find(pc) != activeSession.dependencyChain.end()) {
+        isInChain = true;
+        stridePC = activeSession.stridePC;
+        // 将依赖链转换为有序向量（这里需要根据实际的依赖顺序排序）
+        for (const auto& chainPC : activeSession.dependencyChain) {
+            chainOrder.push_back(chainPC);
+        }
+        std::sort(chainOrder.begin(), chainOrder.end()); // 按PC地址排序
+    }
+    
+    // 检查是否在已完成的依赖链中
+    if (!isInChain) {
+        for (const auto& chain : dependencyChains) {
+            auto it = std::find(chain.chainPCs.begin(), chain.chainPCs.end(), pc);
+            if (it != chain.chainPCs.end()) {
+                isInChain = true;
+                stridePC = chain.basePC;
+                chainOrder = chain.chainPCs; // 已完成的链应该已经是有序的
+                break;
+            }
+        }
+    }
+    
+    // 如果不在依赖链中，直接返回
+    if (!isInChain) {
+        return;
+    }
+    
+    // 检查是否已经处理完整个依赖链
+    if (!chainOrder.empty()) {
+        Addr lastPC = chainOrder.back(); // 依赖链的最后一条指令
+        
+        // 如果当前PC是最后一条指令，处理完后就停止
+        if (pc == lastPC) {
+            printf("DVR: Reached end of dependency chain at PC %#lx\n", pc);
         }
         
-        // 更新计算步骤中的值
-        step.operand1 = currentValue;
-        step.result = currentValue;
-        
-        printf("DVR: Recompute step at PC %#lx: %s src=%#lx, op2=%#lx -> result=%#lx (%s)\n",
-               step.pc, step.operation.c_str(), step.operand1, step.operand2, 
-               step.result, step.description.c_str());
+        // 检查当前已存储的步骤数量，如果已经存储了整个链，就不再存储
+        auto& steps = currentSessionComputeSteps[stridePC];
+        if (steps.size() >= chainOrder.size()) {
+            printf("DVR: Dependency chain already fully processed for stride PC %#lx\n", stridePC);
+            return;
+        }
     }
+    
+    printf("DVR: Decoding chain instruction at PC %#lx\n", pc);
+    
+    // 获取指令信息
+    const auto *si = inst->staticInst.get();
+    if (!si) {
+        printf("DVR: Warning - No static instruction available\n");
+        return;
+    }
+    
+    uint32_t machineInst = si->getRawInst();
+    
+    // 解析指令格式
+    uint32_t opcode = machineInst & 0x7f;
+    uint32_t funct3 = (machineInst >> 12) & 0x7;
+    uint32_t funct7 = (machineInst >> 25) & 0x7f;
+    int32_t imm = ((int32_t)machineInst) >> 20;
+    
+    printf("DVR: Raw instruction: 0x%08x\n", machineInst);
+    printf("DVR: Opcode: 0x%02x, funct3: 0x%x, funct7: 0x%x\n", opcode, funct3, funct7);
+    
+    // 初始化变量
+    std::string operation;
+    uint64_t operand2 = 0;
+    std::string description;
+    
+    // 根据指令类型进行特殊处理
+    switch(opcode) {
+        case 0x0a:  // slli
+        {
+            operation = "slli";
+            operand2 = 2;
+            description = "Left shift by " + std::to_string(operand2);
+            break;
+        }
+        
+        case 0x32:  // add
+        {
+            operation = "add";
+            // get the value of the second source operand
+            uint64_t value = 0;
+            inst->getRegOperand(inst->staticInst.get(), 1, &value);
+            //printf operand2
+            printf("DVR: Operand2: %#lx\n", value);
+            operand2 = value;
+            description = "Add base and offset";
+            break;
+        }
+        
+        case 0x03:  // Load
+        {
+            operation = "lw";
+            operand2 = imm;
+            description = "Load from memory: base + " + std::to_string(operand2);
+            printf("DVR: Offset: %#lx\n", operand2);
+            break;
+        }
+        
+        default:
+            printf("DVR: Other instruction type (opcode: 0x%02x)\n", opcode);
+            return;  // 不保存未识别的指令
+    }
+    
+    // 按顺序保存计算步骤到当前会话和computeStepsByPC
+    if (stridePC != 0 && !operation.empty()) {
+        // 找到当前PC在依赖链中的位置
+        auto it = std::find(chainOrder.begin(), chainOrder.end(), pc);
+        if (it != chainOrder.end()) {
+            size_t position = std::distance(chainOrder.begin(), it);
+            
+            // 确保向量有足够的空间
+            auto& steps = currentSessionComputeSteps[stridePC];
+            if (steps.size() <= position) {
+                steps.resize(position + 1, ComputeStep(0, "", 0, 0, 0, ""));
+            }
+            
+            // 在正确的位置插入步骤
+            ComputeStep step(
+                pc,
+                operation,
+                0,  // srcValue 不需要
+                operand2,
+                0,  // result 不需要
+                description
+            );
+            
+            steps[position] = step;
+            
+            // 检查computeStepsByPC中是否已经存在该PC的步骤，避免重复
+            auto& savedSteps = computeStepsByPC[stridePC];
+            bool alreadyExists = false;
+            for (const auto& existingStep : savedSteps) {
+                if (existingStep.pc == pc) {
+                    alreadyExists = true;
+                    break;
+                }
+            }
+            
+            // 只有当该PC的步骤不存在时才添加
+            if (!alreadyExists) {
+                // 按顺序插入到computeStepsByPC中
+                auto insertPos = savedSteps.begin();
+                for (auto it = savedSteps.begin(); it != savedSteps.end(); ++it) {
+                    // 找到第一个PC大于当前PC的位置
+                    auto chainIt = std::find(chainOrder.begin(), chainOrder.end(), it->pc);
+                    auto currentChainIt = std::find(chainOrder.begin(), chainOrder.end(), pc);
+                    
+                    if (chainIt != chainOrder.end() && currentChainIt != chainOrder.end()) {
+                        if (std::distance(chainOrder.begin(), currentChainIt) < 
+                            std::distance(chainOrder.begin(), chainIt)) {
+                            insertPos = it;
+                            break;
+                        }
+                    }
+                    insertPos = it + 1;
+                }
+                savedSteps.insert(insertPos, step);
+            }
+            
+            printf("DVR: WB session compute step %d at PC %#lx: %s op2=%#lx (%s)\n",
+                   (int)(position + 1),
+                   pc, operation.c_str(), operand2, description.c_str());
+            
+            // 如果这是最后一条指令，打印完整的依赖链
+            if (pc == chainOrder.back()) {
+                printf("DVR: Complete dependency chain for stride PC %#lx:\n", stridePC);
+                for (size_t i = 0; i < steps.size(); i++) {
+                    if (!steps[i].operation.empty()) {
+                        printf("DVR:   Step %d: PC %#lx, %s, op2=%#lx (%s)\n",
+                               (int)(i + 1), steps[i].pc, steps[i].operation.c_str(),
+                               steps[i].operand2, steps[i].description.c_str());
+                    }
+                }
+                
+                // 打印保存到computeStepsByPC的内容（按顺序且无重复）
+                printf("DVR: Saved to computeStepsByPC for stride PC %#lx:\n", stridePC);
+                for (size_t i = 0; i < savedSteps.size(); i++) {
+                    printf("DVR:   Saved Step %d: PC %#lx, %s, op2=%#lx (%s)\n",
+                           (int)(i + 1), savedSteps[i].pc, savedSteps[i].operation.c_str(),
+                           savedSteps[i].operand2, savedSteps[i].description.c_str());
+                }
+            }
+        }
+    }
+    
+    printf("DVR: End of chain instruction decode\n\n");
 }
 
 } // namespace o3

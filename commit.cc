@@ -1043,7 +1043,7 @@ Commit::commitInsts()
                 if (drainPending) {
                     if (pc[tid]->microPC() == 0 && interrupt == NoFault &&
                         !thread[tid]->trapPending) {
-                        // Last architectually committed instruction.
+                        // Last architecturally committed instruction.
                         // Squash the pipeline, stall fetch, and use
                         // drainImminent to disable interrupts
                         DPRINTF(Drain, "Draining: %i:%s\n", tid, *pc[tid]);
@@ -1088,6 +1088,34 @@ Commit::commitInsts()
                 if (!interrupt && avoidQuiesceLiveLock &&
                     onInstBoundary && cpu->checkInterrupts(0))
                     squashAfter(tid, head_inst);
+
+                // 添加特定PC的提交信息打印
+                Addr pc = head_inst->pcState().instAddr();
+                if (pc == 0x101a8 || pc == 0x101a6 || pc == 0x101a4) {
+                    printf("DVR: Committing instruction at PC %#lx\n", pc);
+                    printf("DVR: Instruction: %s\n", head_inst->staticInst->getName().c_str());
+                    
+                    // 如果是load指令，打印加载的数据
+                    if (head_inst->isLoad() && head_inst->memData) {
+                        printf("DVR: Loaded data: ");
+                        uint8_t *data = head_inst->memData;
+                        int size = head_inst->effSize;
+                        
+                        if (size == 4) {
+                            uint32_t value = *reinterpret_cast<uint32_t*>(data);
+                            printf("0x%08x (word)\n", value);
+                        } else if (size == 8) {
+                            uint64_t value = *reinterpret_cast<uint64_t*>(data);
+                            printf("0x%016lx (doubleword)\n", value);
+                        } else {
+                            printf("[ ");
+                            for (int i = 0; i < size; i++) {
+                                printf("%02x ", data[i]);
+                            }
+                            printf("] (%d bytes)\n", size);
+                        }
+                    }
+                }
             } else {
                 DPRINTF(Commit, "Unable to commit head instruction PC:%s "
                         "[tid:%i] [sn:%llu].\n",
