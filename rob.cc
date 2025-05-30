@@ -40,6 +40,7 @@
 
 #include "cpu/o3/rob.hh"
 
+#include <cstdint>
 #include <list>
 
 #include "base/logging.hh"
@@ -261,6 +262,17 @@ ROB::retireHead(ThreadID tid)
     }
     // check if current instruction is a branch target
     Addr branchTarget = cpu->taintScoreboard.checkBranchInstruction(head_inst);
+    // //get the value of branch operand
+    // uint64_t branchOperand0 = cpu->taintScoreboard.getBranchOperand(head_inst, 0);
+    // uint64_t branchOperand1 = cpu->taintScoreboard.getBranchOperand(head_inst, 1);
+    // //print the value of branch operand
+    // printf("v1: %ld, v2: %ld\n",branchOperand0, branchOperand1);
+    // if(branchOperand0 < branchOperand1) {
+    //     printf("DVR: loop bound is not arrive");
+    // } else {
+    //     printf("DVR: arrived loop bound");
+    // }
+
     if (stride_pc == branchTarget) {
         // if current instruction is a branch target, clear all taint
         cpu->taintScoreboard.clearAllTaints();

@@ -1315,6 +1315,23 @@ Commit::commitHead(const DynInstPtr &head_inst, unsigned inst_num)
     if (head_inst->isStore() || head_inst->isAtomic())
         committedStores[tid] = true;
 
+    // 在指令提交时检查分支指令
+    if (head_inst->isDirectCtrl() && head_inst->pcState().instAddr() == 0x101ae) {
+        printf("DVR: Committing branch at PC 0x101ae\n");
+        
+        //get the value of branch operand
+        uint64_t branchOperand0 = cpu->taintScoreboard.getBranchOperand(head_inst, 0);
+        uint64_t branchOperand1 = cpu->taintScoreboard.getBranchOperand(head_inst, 1);
+        
+        //print the value of branch operand
+        printf("v1: %ld, v2: %ld\n", branchOperand0, branchOperand1);
+        if(branchOperand0 < branchOperand1) {
+            printf("DVR: loop bound is not arrive\n");
+        } else {
+            printf("DVR: arrived loop bound\n");
+        }
+    }
+
     // Return true to indicate that we have committed an instruction.
     return true;
 }

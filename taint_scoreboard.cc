@@ -1,6 +1,8 @@
 #include "cpu/o3/taint_scoreboard.hh"
 #include "cpu/o3/dyn_inst.hh"
 #include "cpu/o3/cpu.hh"
+#include <cstdint>
+#include <cstdio>
 
 namespace gem5
 {
@@ -110,8 +112,8 @@ TaintScoreboard::propagateTaint(const DynInstPtr& inst)
     
     for (int i = 0; i < inst->numSrcRegs(); i++) {
         PhysRegIdPtr srcReg = inst->renamedSrcIdx(i);
-        printf("DVR: Checking source register %s (phys: %d) at PC: %#lx\n",
-               srcReg->className(), (int)srcReg->index(), currentPC);
+        // printf("DVR: Checking source register %s (phys: %d) at PC: %#lx\n",
+            //    srcReg->className(), (int)srcReg->index(), currentPC);
         
         if (srcReg && srcReg->index() < taintedRegs.size() && 
             taintedRegs[srcReg->index()]) {
@@ -130,8 +132,8 @@ TaintScoreboard::propagateTaint(const DynInstPtr& inst)
                 activeSession.dependencyChain.insert(currentPC);
             }
             
-            printf("DVR: Found tainted source register %s (phys: %d) at PC: %#lx\n",
-                   srcReg->className(), (int)srcReg->index(), currentPC);
+            // printf("DVR: Found tainted source register %s (phys: %d) at PC: %#lx\n",
+                //    srcReg->className(), (int)srcReg->index(), currentPC);
             break;
         }
     }
@@ -145,10 +147,10 @@ TaintScoreboard::propagateTaint(const DynInstPtr& inst)
             taintedRegs[destReg->index()] = true;
             numTaintPropagations++;
             
-            printf("DVR: Propagating taint from reg %s (phys: %d) to reg %s (phys: %d) at PC: %#lx\n",
-                   taintedSrcReg->className(), (int)taintedSrcReg->index(),
-                   destReg->className(), (int)destReg->index(),
-                   currentPC);
+            // printf("DVR: Propagating taint from reg %s (phys: %d) to reg %s (phys: %d) at PC: %#lx\n",
+                //    taintedSrcReg->className(), (int)taintedSrcReg->index(),
+                //    destReg->className(), (int)destReg->index(),
+                //    currentPC);
         }
     }
     // if there is no tainted source register, but there is a destination register, clear the destination register's taint
@@ -157,8 +159,8 @@ TaintScoreboard::propagateTaint(const DynInstPtr& inst)
         
         if (destReg && destReg->index() < taintedRegs.size() && taintedRegs[destReg->index()]) {
             taintedRegs[destReg->index()] = false;
-            printf("DVR: Cleared taint from reg %s (phys: %d) at PC: %#lx\n",
-                   destReg->className(), (int)destReg->index(), currentPC);
+            // printf("DVR: Cleared taint from reg %s (phys: %d) at PC: %#lx\n",
+                //    destReg->className(), (int)destReg->index(), currentPC);
         }
     }
 
@@ -166,8 +168,8 @@ TaintScoreboard::propagateTaint(const DynInstPtr& inst)
     if (inst->isLoad() && hasTaintedSrc) {
         numDetectedPatterns++;
         
-        printf("DVR: Detected indirect memory access pattern: base PC: %#lx, indirect PC: %#lx\n",
-               stridePC, currentPC);
+        // printf("DVR: Detected indirect memory access pattern: base PC: %#lx, indirect PC: %#lx\n",
+            //    stridePC, currentPC);
         
         // save the dependency chain
         DependencyChain chain(stridePC, currentPC);
@@ -190,7 +192,7 @@ TaintScoreboard::propagateTaint(const DynInstPtr& inst)
         printf("DVR: Saved dependency chain and cleared taints\n");
         
         // print all dependency chains
-        printDependencyChains();
+        // printDependencyChains();
     }
     
 }
@@ -230,6 +232,69 @@ TaintScoreboard::checkBranchInstruction(const DynInstPtr& inst)
     
     // if the branch is predicted to be not taken, return 0
     return 0;
+}
+
+//create a funtion to get the operand 1/2 of branch instruction
+uint64_t 
+TaintScoreboard::getBranchOperand(const DynInstPtr& inst, int operandIndex)
+{
+    if (!inst) {
+        printf("DVR: Warning - Null instruction pointer\n");
+        return 0;
+    }
+    
+    if (!inst->staticInst) {
+        printf("DVR: Warning - Null static instruction\n");
+        return 0;
+    }
+    
+    if (inst->isSquashed()) {
+        printf("DVR: Warning - Instruction is squashed\n");
+        return 0;
+    }
+    
+    if (!inst->isExecuted()) {
+        printf("DVR: Warning - Instruction not executed yet\n");
+        return 0;
+    }
+    
+    // 检查操作数索引
+    if (operandIndex < 0 || operandIndex >= inst->numSrcRegs()) {
+        printf("DVR: Warning - Invalid operand index %d (numSrcRegs: %d)\n", 
+               operandIndex, inst->numSrcRegs());
+        return 0;
+    }
+    
+    // 只处理分支指令
+    if (!inst->isDirectCtrl()) {
+        printf("DVR: Warning - Not a direct control instruction\n");
+        return 0;
+    }
+    
+    Addr currentPC = inst->pcState().instAddr();
+    printf("DVR: Processing branch at PC %#lx\n", currentPC);
+    
+    // 只处理特定PC
+    if (currentPC != 0x101ae) {
+        return 0;
+    }
+    
+    try {
+        uint64_t value = 0;
+        
+        // 使用原来的getRegOperand方法
+        inst->getRegOperand(inst->staticInst.get(), operandIndex, &value);
+        
+        printf("DVR: Branch operand %d value: %#lx\n", operandIndex, value);
+        
+        return value;
+    } catch (const std::exception& e) {
+        printf("DVR: Exception in getBranchOperand: %s\n", e.what());
+        return 0;
+    } catch (...) {
+        printf("DVR: Unknown exception in getBranchOperand\n");
+        return 0;
+    }
 }
 
 void
@@ -436,18 +501,18 @@ TaintScoreboard::decodeChainInstructionOperands(Addr pc, const DynInstPtr& inst)
         
         // 如果当前PC是最后一条指令，处理完后就停止
         if (pc == lastPC) {
-            printf("DVR: Reached end of dependency chain at PC %#lx\n", pc);
+            // printf("DVR: Reached end of dependency chain at PC %#lx\n", pc);
         }
         
         // 检查当前已存储的步骤数量，如果已经存储了整个链，就不再存储
         auto& steps = currentSessionComputeSteps[stridePC];
         if (steps.size() >= chainOrder.size()) {
-            printf("DVR: Dependency chain already fully processed for stride PC %#lx\n", stridePC);
+            // printf("DVR: Dependency chain already fully processed for stride PC %#lx\n", stridePC);
             return;
         }
     }
     
-    printf("DVR: Decoding chain instruction at PC %#lx\n", pc);
+    // printf("DVR: Decoding chain instruction at PC %#lx\n", pc);
     
     // 获取指令信息
     const auto *si = inst->staticInst.get();
@@ -464,8 +529,8 @@ TaintScoreboard::decodeChainInstructionOperands(Addr pc, const DynInstPtr& inst)
     uint32_t funct7 = (machineInst >> 25) & 0x7f;
     int32_t imm = ((int32_t)machineInst) >> 20;
     
-    printf("DVR: Raw instruction: 0x%08x\n", machineInst);
-    printf("DVR: Opcode: 0x%02x, funct3: 0x%x, funct7: 0x%x\n", opcode, funct3, funct7);
+    // printf("DVR: Raw instruction: 0x%08x\n", machineInst);
+    // printf("DVR: Opcode: 0x%02x, funct3: 0x%x, funct7: 0x%x\n", opcode, funct3, funct7);
     
     // 初始化变量
     std::string operation;
@@ -489,7 +554,7 @@ TaintScoreboard::decodeChainInstructionOperands(Addr pc, const DynInstPtr& inst)
             uint64_t value = 0;
             inst->getRegOperand(inst->staticInst.get(), 1, &value);
             //printf operand2
-            printf("DVR: Operand2: %#lx\n", value);
+            // printf("DVR: Operand2: %#lx\n", value);
             operand2 = value;
             description = "Add base and offset";
             break;
@@ -500,7 +565,7 @@ TaintScoreboard::decodeChainInstructionOperands(Addr pc, const DynInstPtr& inst)
             operation = "lw";
             operand2 = imm;
             description = "Load from memory: base + " + std::to_string(operand2);
-            printf("DVR: Offset: %#lx\n", operand2);
+            // printf("DVR: Offset: %#lx\n", operand2);
             break;
         }
         

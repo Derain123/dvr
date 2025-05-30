@@ -429,7 +429,7 @@ LSQ::recvTimingResp(PacketPtr pkt)
             // 4 bytes - print as unsigned integer
             uint32_t value = *reinterpret_cast<uint32_t*>(data);
             vectorLoadValues.push_back(value);  // save loaded value
-            printf("0x%08X (word)\n", value);
+            // printf("0x%08X (word)\n", value);
 
             // 使用保存的 stride load PC
             const auto* steps = cpu->taintScoreboard.getComputeSteps(currentStridePC);
@@ -465,6 +465,7 @@ LSQ::recvTimingResp(PacketPtr pkt)
     if (dependentMarker) {
         //print data
         printf("Received dependent load response for address: %#lX\n", pkt->getAddr());
+        printf("  Packet size: %d bytes\n", pkt->getSize());
         printf("  Data received: ");
 
         // get data size and pointer

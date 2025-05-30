@@ -94,6 +94,9 @@ public:
     
     // 检查分支指令并返回跳转地址，如果不是分支指令或未执行则返回0
     Addr checkBranchInstruction(const DynInstPtr& inst);
+
+    //create a funtion to get the operand 1/2 of branch instruction
+    uint64_t getBranchOperand(const DynInstPtr& inst, int operandIndex);
     
     // 打印所有找到的依赖链
     void printDependencyChains() const;

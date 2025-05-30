@@ -236,6 +236,8 @@ class IEW
         ldstQueue.setLastRetiredHtmUid(tid, htmUid);
     }
 
+    bool getLoopBoundArrive();
+
   private:
     /** Sends commit proper information for a squash due to a branch
      * mispredict.
@@ -346,6 +348,9 @@ class IEW
      * CPU can deschedule itself if there is no activity.
      */
     bool wroteToTimeBuffer;
+
+    /** Global flag to check if the loop bound is arrive. */
+    bool loopBoundArrive = false;
 
     /** Debug function to print instructions that are issued this cycle. */
     void printAvailableInsts();

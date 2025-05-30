@@ -1359,6 +1359,35 @@ IEW::writebackInsts()
 
         Addr pc = inst->pcState().instAddr();
         
+        // 在调用getBranchOperand之前添加更多检查
+        if (inst->isDirectCtrl() && inst->pcState().instAddr() == 0x101ae) {
+            // 确保指令已经执行完成且没有被squash
+            if (inst->isExecuted() && !inst->isSquashed()) {
+                printf("DVR: Branch at PC 0x101ae\n");
+                printf("in branch pc 0x101ae get operand\n");
+                
+                //get the value of branch operand
+                uint64_t branchOperand0 = cpu->taintScoreboard.getBranchOperand(inst, 0);
+                uint64_t branchOperand1 = cpu->taintScoreboard.getBranchOperand(inst, 1);
+                
+
+                //print the value of branch operand
+                printf("v1: %ld, v2: %ld\n", branchOperand0, branchOperand1);
+                if(branchOperand0 < branchOperand1 - 16) {
+                    printf("DVR: loop bound is not arrive\n");
+                    loopBoundArrive = false;
+                } else {
+                    printf("DVR: arrived loop bound\n");
+                    loopBoundArrive = true;
+                }
+            } else {
+                printf("DVR: Branch instruction at 0x101ae not ready (executed: %s, squashed: %s, completed: %s)\n",
+                       inst->isExecuted() ? "true" : "false",
+                       inst->isSquashed() ? "true" : "false", 
+                       inst->isCompleted() ? "true" : "false");
+            }
+        }
+        
         // 调用依赖链指令解码函数
         cpu->taintScoreboard.decodeChainInstructionOperands(pc, inst);
 
@@ -1587,6 +1616,12 @@ IEW::checkMisprediction(const DynInstPtr& inst)
             }
         }
     }
+}
+
+bool
+IEW::getLoopBoundArrive()
+{
+    return loopBoundArrive;
 }
 
 } // namespace o3
